@@ -5,6 +5,7 @@ import NotFoundError from '../errors/not-found-error'
 import Order, { IOrder } from '../models/order'
 import Product, { IProduct } from '../models/product'
 import User from '../models/user'
+import sanitizeHtml from 'sanitize-html'
 
 // eslint-disable-next-line max-len
 // GET /orders?page=2&limit=5&sort=totalAmount&order=desc&orderDateFrom=2024-07-01&orderDateTo=2024-08-01&status=delivering&totalAmountFrom=100&totalAmountTo=1000&search=%2B1
@@ -279,9 +280,17 @@ export const createOrder = async (
     try {
         const basket: IProduct[] = []
         const products = await Product.find<IProduct>({})
+
         const userId = res.locals.user._id as Types.ObjectId
-        const { address, payment, phone, total, email, items, comment } =
-            req.body
+        let { address, payment, phone, total, email, items, comment } = req.body
+
+        // Санитизация комментария
+        if (comment && typeof comment === 'string') {
+            comment = sanitizeHtml(comment, {
+                allowedTags: [],        // разрешен только текст
+                allowedAttributes: {}   // никаких атрибутов
+            })
+        }
 
         items.forEach((id: Types.ObjectId) => {
             const product = products.find((p) => (p._id as Types.ObjectId).equals(id))
@@ -293,6 +302,7 @@ export const createOrder = async (
             }
             basket.push(product)
         })
+
         const totalBasket = basket.reduce((a, c) => a + c.price, 0)
         if (totalBasket !== total) {
             return next(new BadRequestError('Неверная сумма заказа'))
@@ -304,10 +314,11 @@ export const createOrder = async (
             payment,
             phone,
             email,
-            comment,
+            comment, // безопасный комментарий
             customer: userId,
             deliveryAddress: address,
         })
+
         const populateOrder = await newOrder.populate(['customer', 'products'])
         await populateOrder.save()
 
