@@ -17,7 +17,8 @@ export const getOrders = async (
     try {
         const {
             page = 1,
-            limit = 10,
+            // limit = 10,
+            limit: rawLimit = 10,
             sortField = 'createdAt',
             sortOrder = 'desc',
             status,
@@ -27,6 +28,8 @@ export const getOrders = async (
             orderDateTo,
             search,
         } = req.query
+
+        const limit = Math.min(Number(rawLimit) || 10, 10)
 
         const filters: FilterQuery<IOrder> = {}
 
