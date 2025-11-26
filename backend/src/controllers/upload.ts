@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express'
 import { constants } from 'http2'
 import BadRequestError from '../errors/bad-request-error'
+import sharp from 'sharp'
 
 export const uploadFile = async (
     req: Request,
@@ -16,6 +17,19 @@ export const uploadFile = async (
         const fileSize = req.file.size ?? req.file.buffer?.length ?? 0;
         if (fileSize < MIN_SIZE) {
             return next(new BadRequestError('Файл меньше минимального допустимого размера - 2KB'))
+        }
+
+        // Проверка, что файл является изображением
+        try {
+            if (req.file.path) {
+                await sharp(req.file.path).metadata()
+            } else if (req.file.buffer) {
+                await sharp(req.file.buffer).metadata()
+            } else {
+                throw new Error('Нет данных для проверки изображения')
+            }
+        } catch {
+            return next(new BadRequestError('Файл не является изображением'))
         }
 
         const fullPath = process.env.UPLOAD_PATH
