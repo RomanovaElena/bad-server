@@ -1,6 +1,8 @@
 import { Request, Express } from 'express'
 import multer, { FileFilterCallback } from 'multer'
-import { join } from 'path'
+import { join, extname, basename } from 'path'
+import { randomUUID } from 'crypto'
+import fs from 'fs'
 
 type DestinationCallback = (error: Error | null, destination: string) => void
 type FileNameCallback = (error: Error | null, filename: string) => void
@@ -11,15 +13,16 @@ const storage = multer.diskStorage({
         _file: Express.Multer.File,
         cb: DestinationCallback
     ) => {
-        cb(
-            null,
-            join(
-                __dirname,
-                process.env.UPLOAD_PATH_TEMP
-                    ? `../public/${process.env.UPLOAD_PATH_TEMP}`
-                    : '../public'
-            )
-        )
+        const uploadDir = process.env.UPLOAD_PATH_TEMP
+            ? join(__dirname, `../public/${process.env.UPLOAD_PATH_TEMP}`)
+            : join(__dirname, '../public')
+
+        // Создать папку, если не директория существует
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true })
+        }
+
+        cb(null, uploadDir)
     },
 
     filename: (
@@ -27,7 +30,9 @@ const storage = multer.diskStorage({
         file: Express.Multer.File,
         cb: FileNameCallback
     ) => {
-        cb(null, file.originalname)
+        const extension = extname(basename(file.originalname)) || '.dat'
+        const uniqueName = `${randomUUID()}${extension}`
+        cb(null, uniqueName)
     },
 })
 
