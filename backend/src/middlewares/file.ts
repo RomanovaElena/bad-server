@@ -17,7 +17,7 @@ const storage = multer.diskStorage({
             ? join(__dirname, `../public/${process.env.UPLOAD_PATH_TEMP}`)
             : join(__dirname, '../public')
 
-        // Созда папку, если не директория существует
+        // Создать папку, если директория не существует
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true })
         }

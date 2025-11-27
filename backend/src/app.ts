@@ -10,12 +10,12 @@ import errorHandler from './middlewares/error-handler'
 import serveStatic from './middlewares/serverStatic'
 import routes from './routes'
 import rateLimit from 'express-rate-limit'
+import fs from 'fs'
 
 const { PORT = 3000, ORIGIN_ALLOW = 'http://localhost:5173' } = process.env
 const app = express()
 
 app.use(cookieParser())
-
 
 app.use(cors({
   origin: ORIGIN_ALLOW,
@@ -23,6 +23,16 @@ app.use(cors({
 }))
 // app.use(cors({ origin: ORIGIN_ALLOW, credentials: true }));
 // app.use(express.static(path.join(__dirname, 'public')));
+
+// Создание каталога для временных загрузок
+const createTempUploadDir = (): void => {
+    const srcUploadDir = path.join(__dirname, '../src/public/temp')
+    
+    if (!fs.existsSync(srcUploadDir)) {
+        fs.mkdirSync(srcUploadDir, { recursive: true })
+    }
+}
+createTempUploadDir()
 
 app.use(serveStatic(path.join(__dirname, 'public')))
 
