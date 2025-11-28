@@ -9,22 +9,51 @@ import { DB_ADDRESS } from './config'
 import errorHandler from './middlewares/error-handler'
 import serveStatic from './middlewares/serverStatic'
 import routes from './routes'
+import rateLimit from 'express-rate-limit'
+import fs from 'fs'
 
-const { PORT = 3000 } = process.env
+const { PORT = 3000, ORIGIN_ALLOW = 'http://localhost:5173' } = process.env
 const app = express()
 
 app.use(cookieParser())
 
-app.use(cors())
+app.use(cors({
+  origin: ORIGIN_ALLOW,
+  credentials: true,
+}))
 // app.use(cors({ origin: ORIGIN_ALLOW, credentials: true }));
 // app.use(express.static(path.join(__dirname, 'public')));
 
+// Создание каталога для временных загрузок
+const createTempUploadDir = (): void => {
+    const srcUploadDir = path.join(__dirname, '../src/public/temp')
+    
+    if (!fs.existsSync(srcUploadDir)) {
+        fs.mkdirSync(srcUploadDir, { recursive: true })
+    }
+}
+createTempUploadDir()
+
 app.use(serveStatic(path.join(__dirname, 'public')))
 
-app.use(urlencoded({ extended: true }))
-app.use(json())
+// Ограничение размера тела запроса 20 MB
+app.use(urlencoded({ extended: true, limit: '20mb' }))
+app.use(json({ limit: '20mb' }))
 
-app.options('*', cors())
+// Рейт-лимит - 50 запросов в минуту
+const limiter = rateLimit({
+  windowMs: 1 * 60 * 1000, 
+  max: 50,                
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Слишком много запросов с одного IP адреса, повторите попытку позже',
+})
+app.use(limiter)
+
+app.options('*', cors({
+  origin: ORIGIN_ALLOW,
+  credentials: true,
+}))
 app.use(routes)
 app.use(errors())
 app.use(errorHandler)

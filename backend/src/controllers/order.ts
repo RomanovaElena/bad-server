@@ -5,6 +5,7 @@ import NotFoundError from '../errors/not-found-error'
 import Order, { IOrder } from '../models/order'
 import Product, { IProduct } from '../models/product'
 import User from '../models/user'
+import sanitizeHtml from 'sanitize-html'
 
 // eslint-disable-next-line max-len
 // GET /orders?page=2&limit=5&sort=totalAmount&order=desc&orderDateFrom=2024-07-01&orderDateTo=2024-08-01&status=delivering&totalAmountFrom=100&totalAmountTo=1000&search=%2B1
@@ -17,7 +18,8 @@ export const getOrders = async (
     try {
         const {
             page = 1,
-            limit = 10,
+            // limit = 10,
+            limit: rawLimit = 10,
             sortField = 'createdAt',
             sortOrder = 'desc',
             status,
@@ -28,44 +30,34 @@ export const getOrders = async (
             search,
         } = req.query
 
-        const filters: FilterQuery<Partial<IOrder>> = {}
+        // Нормализация лимита заказов
+        const limit = Math.min(Number(rawLimit) || 10, 10)
 
-        if (status) {
-            if (typeof status === 'object') {
-                Object.assign(filters, status)
-            }
-            if (typeof status === 'string') {
-                filters.status = status
+        // Защита от NoSQL-инъекций
+        const assertSafe = (value: any, name: string) => {
+            if (typeof value === 'object' && value !== null) {
+                throw new BadRequestError(`Недопустимый формат параметра '${name}'`)
             }
         }
 
-        if (totalAmountFrom) {
-            filters.totalAmount = {
-                ...filters.totalAmount,
-                $gte: Number(totalAmountFrom),
-            }
-        }
+        assertSafe(status, 'status')
+        assertSafe(totalAmountFrom, 'totalAmountFrom')
+        assertSafe(totalAmountTo, 'totalAmountTo')
+        assertSafe(orderDateFrom, 'orderDateFrom')
+        assertSafe(orderDateTo, 'orderDateTo')
+        assertSafe(search, 'search')
+        assertSafe(sortField, 'sortField')
+        assertSafe(sortOrder, 'sortOrder')
+        assertSafe(page, 'page')
+        assertSafe(limit, 'limit')
 
-        if (totalAmountTo) {
-            filters.totalAmount = {
-                ...filters.totalAmount,
-                $lte: Number(totalAmountTo),
-            }
-        }
+        const filters: FilterQuery<IOrder> = {}
 
-        if (orderDateFrom) {
-            filters.createdAt = {
-                ...filters.createdAt,
-                $gte: new Date(orderDateFrom as string),
-            }
-        }
-
-        if (orderDateTo) {
-            filters.createdAt = {
-                ...filters.createdAt,
-                $lte: new Date(orderDateTo as string),
-            }
-        }
+        if (status && typeof status === 'string') filters.status = status
+        if (totalAmountFrom) filters.totalAmount = { ...filters.totalAmount, $gte: Number(totalAmountFrom) }
+        if (totalAmountTo) filters.totalAmount = { ...filters.totalAmount, $lte: Number(totalAmountTo) }
+        if (orderDateFrom) filters.createdAt = { ...filters.createdAt, $gte: new Date(orderDateFrom as string) }
+        if (orderDateTo) filters.createdAt = { ...filters.createdAt, $lte: new Date(orderDateTo as string) }
 
         const aggregatePipeline: any[] = [
             { $match: filters },
@@ -89,35 +81,25 @@ export const getOrders = async (
             { $unwind: '$products' },
         ]
 
-        if (search) {
-            const searchRegex = new RegExp(search as string, 'i')
+        if (search && typeof search === 'string') {
+            const safe = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            const searchRegex = new RegExp(safe, 'i')
             const searchNumber = Number(search)
 
             const searchConditions: any[] = [{ 'products.title': searchRegex }]
+            if (!Number.isNaN(searchNumber)) searchConditions.push({ orderNumber: searchNumber })
 
-            if (!Number.isNaN(searchNumber)) {
-                searchConditions.push({ orderNumber: searchNumber })
-            }
-
-            aggregatePipeline.push({
-                $match: {
-                    $or: searchConditions,
-                },
-            })
-
+            aggregatePipeline.push({ $match: { $or: searchConditions } })
             filters.$or = searchConditions
         }
 
         const sort: { [key: string]: any } = {}
-
-        if (sortField && sortOrder) {
-            sort[sortField as string] = sortOrder === 'desc' ? -1 : 1
-        }
+        sort[sortField as string] = sortOrder === 'desc' ? -1 : 1
 
         aggregatePipeline.push(
             { $sort: sort },
-            { $skip: (Number(page) - 1) * Number(limit) },
-            { $limit: Number(limit) },
+            { $skip: (Number(page) - 1) * limit },
+            { $limit: limit },
             {
                 $group: {
                     _id: '$_id',
@@ -133,7 +115,7 @@ export const getOrders = async (
 
         const orders = await Order.aggregate(aggregatePipeline)
         const totalOrders = await Order.countDocuments(filters)
-        const totalPages = Math.ceil(totalOrders / Number(limit))
+        const totalPages = Math.ceil(totalOrders / limit)
 
         res.status(200).json({
             orders,
@@ -141,7 +123,7 @@ export const getOrders = async (
                 totalOrders,
                 totalPages,
                 currentPage: Number(page),
-                pageSize: Number(limit),
+                pageSize: limit,
             },
         })
     } catch (error) {
@@ -155,12 +137,20 @@ export const getOrdersCurrentUser = async (
     next: NextFunction
 ) => {
     try {
-        const userId = res.locals.user._id
-        const { search, page = 1, limit = 5 } = req.query
-        const options = {
-            skip: (Number(page) - 1) * Number(limit),
-            limit: Number(limit),
+        const userId = res.locals.user._id as Types.ObjectId
+        const { search, page = 1, limit: rawLimit = 5 } = req.query
+        const limit = Math.min(Number(rawLimit) || 5, 10)
+        const skip = (Number(page) - 1) * limit
+
+        const assertSafe = (value: any, name: string) => {
+            if (typeof value === 'object' && value !== null) {
+                throw new BadRequestError(`Недопустимый формат параметра '${name}'`)
+            }
         }
+
+        assertSafe(search, 'search')
+        assertSafe(page, 'page')
+        assertSafe(limit, 'limit')
 
         const user = await User.findById(userId)
             .populate({
@@ -183,19 +173,18 @@ export const getOrdersCurrentUser = async (
 
         let orders = user.orders as unknown as IOrder[]
 
-        if (search) {
-            // если не экранировать то получаем Invalid regular expression: /+1/i: Nothing to repeat
-            const searchRegex = new RegExp(search as string, 'i')
+        if (search && typeof search === 'string') {
+            const safe = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            const searchRegex = new RegExp(safe, 'i')
             const searchNumber = Number(search)
+
             const products = await Product.find({ title: searchRegex })
-            const productIds = products.map((product) => product._id)
+            const productIds = products.map((product) => product._id as Types.ObjectId)
 
             orders = orders.filter((order) => {
-                // eslint-disable-next-line max-len
                 const matchesProductTitle = order.products.some((product) =>
-                    productIds.some((id) => id.equals(product._id))
+                    productIds.some((id) => (product._id as Types.ObjectId).equals(id))
                 )
-                // eslint-disable-next-line max-len
                 const matchesOrderNumber =
                     !Number.isNaN(searchNumber) &&
                     order.orderNumber === searchNumber
@@ -205,9 +194,9 @@ export const getOrdersCurrentUser = async (
         }
 
         const totalOrders = orders.length
-        const totalPages = Math.ceil(totalOrders / Number(limit))
+        const totalPages = Math.ceil(totalOrders / limit)
 
-        orders = orders.slice(options.skip, options.skip + options.limit)
+        orders = orders.slice(skip, skip + limit)
 
         return res.send({
             orders,
@@ -215,7 +204,7 @@ export const getOrdersCurrentUser = async (
                 totalOrders,
                 totalPages,
                 currentPage: Number(page),
-                pageSize: Number(limit),
+                pageSize: limit,
             },
         })
     } catch (error) {
@@ -225,13 +214,14 @@ export const getOrdersCurrentUser = async (
 
 // Get order by ID
 export const getOrderByNumber = async (
-    req: Request,
+    req: Request<{ orderNumber: string }>,
     res: Response,
     next: NextFunction
 ) => {
     try {
+        const orderNumber = Number(req.params.orderNumber)
         const order = await Order.findOne({
-            orderNumber: req.params.orderNumber,
+            orderNumber,
         })
             .populate(['customer', 'products'])
             .orFail(
@@ -250,14 +240,15 @@ export const getOrderByNumber = async (
 }
 
 export const getOrderCurrentUserByNumber = async (
-    req: Request,
+    req: Request<{ orderNumber: string }>,
     res: Response,
     next: NextFunction
 ) => {
-    const userId = res.locals.user._id
+    const userId = res.locals.user._id as Types.ObjectId
     try {
+        const orderNumber = Number(req.params.orderNumber)
         const order = await Order.findOne({
-            orderNumber: req.params.orderNumber,
+            orderNumber,
         })
             .populate(['customer', 'products'])
             .orFail(
@@ -266,8 +257,7 @@ export const getOrderCurrentUserByNumber = async (
                         'Заказ по заданному id отсутствует в базе'
                     )
             )
-        if (!order.customer._id.equals(userId)) {
-            // Если нет доступа не возвращаем 403, а отдаем 404
+        if (!(order.customer._id as Types.ObjectId).equals(userId)) {
             return next(
                 new NotFoundError('Заказ по заданному id отсутствует в базе')
             )
@@ -290,20 +280,29 @@ export const createOrder = async (
     try {
         const basket: IProduct[] = []
         const products = await Product.find<IProduct>({})
-        const userId = res.locals.user._id
-        const { address, payment, phone, total, email, items, comment } =
-            req.body
+
+        const userId = res.locals.user._id as Types.ObjectId
+        let { address, payment, phone, total, email, items, comment } = req.body
+
+        // Санитизация комментария
+        if (comment && typeof comment === 'string') {
+            comment = sanitizeHtml(comment, {
+                allowedTags: [],        // разрешен только текст
+                allowedAttributes: {}   // никаких атрибутов
+            })
+        }
 
         items.forEach((id: Types.ObjectId) => {
-            const product = products.find((p) => p._id.equals(id))
+            const product = products.find((p) => (p._id as Types.ObjectId).equals(id))
             if (!product) {
                 throw new BadRequestError(`Товар с id ${id} не найден`)
             }
             if (product.price === null) {
                 throw new BadRequestError(`Товар с id ${id} не продается`)
             }
-            return basket.push(product)
+            basket.push(product)
         })
+
         const totalBasket = basket.reduce((a, c) => a + c.price, 0)
         if (totalBasket !== total) {
             return next(new BadRequestError('Неверная сумма заказа'))
@@ -315,10 +314,11 @@ export const createOrder = async (
             payment,
             phone,
             email,
-            comment,
+            comment, // безопасный комментарий
             customer: userId,
             deliveryAddress: address,
         })
+
         const populateOrder = await newOrder.populate(['customer', 'products'])
         await populateOrder.save()
 
@@ -333,14 +333,15 @@ export const createOrder = async (
 
 // Update an order
 export const updateOrder = async (
-    req: Request,
+    req: Request<{ orderNumber: string }>,
     res: Response,
     next: NextFunction
 ) => {
     try {
         const { status } = req.body
+        const orderNumber = Number(req.params.orderNumber)
         const updatedOrder = await Order.findOneAndUpdate(
-            { orderNumber: req.params.orderNumber },
+            { orderNumber },
             { status },
             { new: true, runValidators: true }
         )
@@ -365,12 +366,13 @@ export const updateOrder = async (
 
 // Delete an order
 export const deleteOrder = async (
-    req: Request,
+    req: Request<{ id: string }>,
     res: Response,
     next: NextFunction
 ) => {
     try {
-        const deletedOrder = await Order.findByIdAndDelete(req.params.id)
+        const id = req.params.id as string
+        const deletedOrder = await Order.findByIdAndDelete(req.params.id as string)
             .orFail(
                 () =>
                     new NotFoundError(
